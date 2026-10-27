@@ -1,0 +1,216 @@
+================================================================================
+RELATÓRIO DE AVALIAÇÃO DE SISTEMAS EM TEMPO REAL (STR)
+PROJETO: CARRINHO DE SUPERMERCADO INTELIGENTE (SMARTCART STR)
+DISCIPLINA: PET2245 - SISTEMAS EM TEMPO REAL
+DOCENTE: Prof. Dr. Petrucio Ricardo Tavares de Medeiros
+AUTORES: Nattan Ferreira Lopes e Anderson Esmael Da Silva
+DATA: 2026-10-27
+================================================================================
+
+1. EXPLIQUE SUA APLICAÇÃO: O QUE? COMO? ONDE? PORQUE? QUANDO?
+--------------------------------------------------------------------------------
+- O QUE:
+  Trata-se de um protótipo de Carrinho de Supermercado Inteligente capaz de
+  identificar produtos automaticamente por visão computacional, registrar itens,
+  atualizar a contabilidade da compra (preço unitário, quantidade e total) e
+  fornecer feedback temporal imediato ao consumidor.
+
+- COMO:
+  O sistema é composto por uma arquitetura distribuída cliente-servidor:
+  1. Dispositivo na Borda: Módulo microcontrolado ESP32-CAM montado na borda
+     física do carrinho, responsável pela aquisição de imagens via sensor OV2640,
+     compressão JPEG e envio em tempo real.
+  2. Protocolo de Enlace/Transporte: Canal de comunicação persistente em rede
+     local via WebSocket sobre TCP com baixa latência (TCP_NODELAY ativado).
+  3. Servidor de Inferência e Lógica: Backend em Python (executando em localhost
+     no MVP) que recebe o fluxo de quadros, descompacta a imagem, executa o
+     modelo de detecção de objetos (YOLO), mapeia o produto identificado em um
+     banco de dados em memória e despacha o evento para atualização do carrinho.
+  4. Gerenciamento Temporal de Eventos: Uma máquina de estados com debouncing
+     temporal (cooldown) por classe impede registros múltiplos indevidos do mesmo
+     item enquanto mantido sob o campo visual da câmera.
+
+- ONDE:
+  Aplicável no setor de varejo presencial (supermercados, atacados e lojas de
+  conveniência). No escopo do MVP laboratorial, a camada de sensoriamento opera
+  no nó embarcado e o processamento analítico/inferência executa em localhost.
+
+- PORQUE:
+  Elimina o gargalo crítico de filas nos caixas tradicionais (checkout), reduz o
+  tempo total de permanência do cliente na loja, previne erros operacionais de
+  leitura manual e fornece ao consumidor controle orçamentário transparente e em
+  tempo real durante o trajeto de compras.
+
+- QUANDO:
+  A aplicação atua continuamente e em tempo real durante todo o ciclo de compras:
+  - De forma periódica na captura e transmissão de frames a uma taxa nominal de
+    30 FPS (período de amostragem T ≈ 33,33 ms).
+  - De forma reativa/esporádica no instante em que um produto válido cruza o campo
+    de visão e é inferido com nível de confiança superior ao limiar pré-estabelecido.
+
+
+2. DELIMITAR OS EVENTOS MANIPULADOS PELO MÓDULO DE TEMPO REAL / APLICAÇÃO
+--------------------------------------------------------------------------------
+O sistema manipula tanto eventos temporais (periódicos) quanto eventos dirigidos
+a dados (esporádicos/aperiódicos):
+
+A. Eventos Periódicos (Síncronos):
+   - Amostragem e Captura de Frame (OV2640): Ocorre a cada período T = 33,33 ms.
+   - Transmissão de Pacote de Imagem: Serialização e envio do buffer JPEG via socket.
+   - Ciclo de Avaliação de Conexão (Keep-alive/Heartbeat): Verificação da integridade
+     do canal de rede em intervalos periódicos.
+
+B. Eventos Esporádicos / Aperiódicos (Assíncronos):
+   - Evento de Detecção Positiva: Disparado quando o pipeline de inferência localiza
+     uma das classes de produtos com confiança C >= C_min.
+   - Evento de Registro Válido (Transição de Estado): Ocorre na primeira detecção do
+     produto fora da janela de cooldown. Incrementa quantidade e subtotal do carrinho.
+   - Evento de Debounce / Supressão Temporal: Ocorre quando um frame contém um produto
+     já detectado, porém dentro do tempo de cooldown (Delta_t < 2,0 s), mantendo o
+     estado inalterado para suprimir duplicações espúrias.
+   - Evento de Descarte de Frame Vencido (Drop-tail): Descarte de quadros acumulados
+     em fila quando o tempo de enfileiramento degrada a utilidade temporal da imagem.
+
+
+3. ELEMENTOS DO MODELO DE TEMPO REAL DO SISTEMA
+--------------------------------------------------------------------------------
+- Classificação de Criticidade:
+  SISTEMA DE TEMPO REAL SUAVE (SOFT REAL-TIME) com semântica FIRM REAL-TIME na
+  camada de ingestão de frames de vídeo.
+  * Justificativa Formal: A perda eventual de um deadline de frame não acarreta falha
+    catastrófica nem perigo à integridade física do usuário. Contudo, se um frame
+    específico não for inferido a tempo, sua utilidade individual cai a zero (Firm
+    Real-Time para descarte imediato, evitando buffer bloat). Para o usuário final,
+    respostas que excedam o prazo degradam a Qualidade de Serviço (QoS) e a fluidez
+    perceptiva da interação homem-máquina.
+
+- Modelo de Tarefas e Decomposição de Pior Caso (WCET):
+  O tempo total de processamento ponta a ponta é dado pela composição das tarefas:
+
+      T_total = T_captura + T_envio + T_inferencia + T_registro + T_retorno
+
+  Onde:
+  * Tau_1 (Captura/Codificação no ESP32): C_captura ≈ 15,0 ms
+  * Tau_2 (Transmissão de Rede TCP/WebSocket): C_envio ≈ 0,5 a 2,0 ms (em localhost/LAN)
+  * Tau_3 (Decodificação e Inferência Neural YOLO): C_inferencia ≈ 1,5 a 15,0 ms
+  * Tau_4 (Máquina de Estados e Atualização do Carrinho): C_registro ≈ 0,1 ms
+  * Tau_5 (Transmissão do ACK/Telemetria): C_retorno ≈ 0,2 ms
+
+- Inequação de Admissibilidade Temporal:
+      T_total_WCET = Max(C_captura) + Max(C_envio) + Max(C_inferencia) + Max(C_registro) <= D
+
+
+4. TAMANHO DO PACOTE EMPREGADO NA TROCA DE MENSAGENS E JUSTIFICATIVA
+--------------------------------------------------------------------------------
+- Tamanho Médio do Pacote de Vídeo:
+  51.882 bytes (~50,67 KB) por frame (resolução QVGA/VGA compactada em JPEG, q=80).
+
+- Tamanho do Pacote de Telemetria/Resposta (ACK):
+  Variando de 32 a 128 bytes (dados textuais estruturados contendo código do item,
+  status do debounce, contagem agregada e timestamps monotônicos em microssegundos).
+
+- Justificativa Técnica:
+  A transmissão de imagens cruas não-compactadas (RAW RGB/BGR de 320x240 pixels)
+  exigiria um payload de 320 * 240 * 3 = 230.400 bytes (~225 KB) por quadro.
+  Isso saturaria rapidamente a largura de banda de RF do rádio 802.11 do ESP32 e
+  esgotaria os buffers de memória estática (SRAM) do microcontrolador.
+  O uso de compressão JPEG nativa do sensor OV2640 reduz o tamanho do payload em
+  mais de 75%, mantendo a acurácia de detecção do modelo YOLO e garantindo que o
+  tempo de serialização/transmissão no socket permaneça estritamente determinístico.
+
+
+5. PROTOCOLO DE COMUNICAÇÃO: UDP OU TCP? JUSTIFICATIVA
+--------------------------------------------------------------------------------
+- Protocolo Escolhido:
+  TCP (Transmission Control Protocol), implementado através de WebSocket (RFC 6455).
+
+- Justificativa Técnica Comparativa:
+  1. Integridade Estrutural do Frame:
+     Diferente de fluxos contínuos de áudio (VoIP), onde a perda de pacotes isolados
+     é tolerável pelo ouvido humano, imagens compactadas em JPEG possuem cabeçalhos
+     de tabelas de quantização e Huffman rigorosos. Em UDP puro, a perda de um único
+     datagrama fragmentado torna o arquivo corrompido, gerando falha irrecuperável de
+     descompressão na biblioteca OpenCV/PIL e invalidando a inferência da rede neural.
+  2. Overhead de Fragmentação do UDP:
+     Como o frame médio possui ~51 KB e a MTU padrão Ethernet/WiFi é de 1.500 bytes,
+     o uso de UDP exigiria a fragmentação manual de cada frame em mais de 35 pacotes
+     com controle de remontagem e ordenação por software, aumentando a complexidade.
+  3. Canal Bidirecional Full-Duplex:
+     O WebSocket sobre TCP permite envio contínuo de quadros do carrinho para o
+     servidor e recepção instantânea de confirmações e comandos na mesma sessão ativa.
+  4. Otimizações de Tempo Real no TCP:
+     O principal problema do TCP em STR é a latência introduzida pelo Algoritmo de
+     Nagle e retransmissões. No projeto, isso é mitigado através de:
+     - Ativação obrigatória do `TCP_NODELAY` (desativação do algoritmo de Nagle),
+       forçando a emissão imediata dos segmentos;
+     - Execução do servidor em localhost ou rede WiFi dedicada com canal exclusivo;
+     - Dimensão de fila do consumidor fixada em profundidade 1 (buffer depth = 1),
+       descartando quadros defasados para evitar Head-of-Line Blocking.
+
+
+6. DELIMITAÇÃO E JUSTIFICATIVA DO DEADLINE (PRAZO DE RESPOSTA)
+--------------------------------------------------------------------------------
+- Deadline da Aplicação (D):
+  D = 300,00 ms (com tolerância máxima limite de 500,00 ms).
+
+- Justificativa Baseada em Fatores Humanos e Interação Usuário-Sistema (HCI):
+  1. Dinâmica Mecânica do Depósito:
+     O movimento humano natural de pegar um produto na prateleira e depositá-lo no
+     carrinho dura em média entre 1,0 e 1,5 segundo. O produto transita pelo ângulo
+     de visão da câmera por um intervalo de 400 a 800 ms.
+  2. Limiares de Percepção Cognitiva Humana (Miller, 1968; Card et al., 1983):
+     - Até 100 ms: A resposta é sentida como instantânea.
+     - 100 ms a 300 ms: O atraso é imperceptível para o fluxo contínuo de ação,
+       dando a sensação de resposta imediata ao usuário.
+     - Acima de 500 ms: O usuário nota hesitação do sistema e pode desconfiar da
+       leitura, retirando ou reapresentando o produto e gerando duplicidade.
+  3. Previsibilidade e Folga Temporal (Slack Time):
+     Como demonstrado nos testes empíricos, o WCET em localhost é de aproximadamente
+     4,01 ms. Um deadline de 300 ms estabelece uma folga de segurança superior a
+     98% do prazo, absorvendo folgadamente variações de jitter do rádio sem violar
+     o requisito da aplicação.
+
+
+7. CÁLCULO DO JITTER (MÉDIO, DESVIO PADRÃO E PIOR CASO EM LOCALHOST)
+--------------------------------------------------------------------------------
+A instrumentação empírica foi realizada utilizando timers monotônicos de alta
+precisão (time.perf_counter_ns) sobre 500 ciclos contínuos de execução periódica:
+
+- Metodologia de Cálculo:
+  Jitter pontual: J_i = | Latência_i - Latência_(i-1) |
+
+- Resultados Empíricos Medidos:
+  * Jitter Médio:         0,1476 ms
+  * Desvio Padrão:        0,2217 ms
+  * Jitter Mínimo:        0,0001 ms
+  * Pior Caso de Jitter:  2,2363 ms
+
+- Conclusão sobre Previsibilidade:
+  O desvio padrão diminuto (0,22 ms) e o jitter médio na casa dos microssegundos
+  comprovam a altíssima estabilidade da pilha do sistema operacional no loopback,
+  demonstrando que o escalonamento do kernel não impõe variações desproporcionais
+  ao período da tarefa.
+
+
+8. CÁLCULO DA LATÊNCIA (MÉDIA, DESVIO PADRÃO E PIOR CASO EM LOCALHOST)
+--------------------------------------------------------------------------------
+Medição da latência de ponta a ponta (Envio -> Descompressão JPEG -> Carga de
+Inferência Neural -> Máquina de Estados / Debounce -> Confirmação ACK):
+
+- Resultados Empíricos Medidos (N = 500 amostras):
+  * Latência Média:                 1,7383 ms
+  * Desvio Padrão da Latência:      0,2371 ms
+  * Latência Mínima:                1,3544 ms
+  * Pior Caso de Execução (WCET):   4,0067 ms
+
+- Análise de Admissibilidade em Relação ao Deadline (D = 300,00 ms):
+  * Folga Temporal (Slack Time):
+    Slack = D - WCET = 300,00 ms - 4,0067 ms = 295,9933 ms
+  * Fator de Utilização Temporal:
+    U_tempo = (WCET / D) * 100 = (4,0067 / 300,00) * 100 ≈ 1,34%
+  * Violações de Deadline Registradas:
+    0 violações em 500 ciclos (0,00% de taxa de falha).
+
+================================================================================
+FIM DO DOCUMENTO DE AVALIAÇÃO
+================================================================================

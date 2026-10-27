@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartCart STR - Monitoramento Automático de Cesto</title>
+    <!-- Google Fonts Inter & JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="dark-theme">
+    <div class="app-container">
+        <!-- Top Navigation Bar -->
+        <header class="top-nav">
+            <div class="brand">
+                <div class="brand-logo">
+                    <span class="logo-icon">🛒</span>
+                </div>
+                <div class="brand-text">
+                    <h1>SmartCart <span>STR</span></h1>
+                    <p class="subtitle">Monitoramento Automático de Cesto por Visão Computacional de Borda</p>
+                    <div class="academic-badge-row">
+                        <span class="academic-tag">PET2245 - Sistemas em Tempo Real</span>
+                        <span class="academic-tag">Prof. Dr. Petrucio Ricardo Tavares de Medeiros</span>
+                        <span class="academic-tag author-tag">Nattan Ferreira Lopes &amp; Anderson Esmael Da Silva</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="nav-metrics">
+                <div class="status-pill connected" id="systemStatus">
+                    <span class="pulse-dot"></span>
+                    <span class="status-label" id="statusText">SISTEMA ATIVO</span>
+                </div>
+                <div class="info-pill">
+                    <span class="pill-label">MODO:</span>
+                    <span class="pill-value text-accent" id="activeMode">AUTO-SYNC CESTO</span>
+                </div>
+                <div class="info-pill">
+                    <span class="pill-label">DEADLINE:</span>
+                    <span class="pill-value text-warning">D = 3000 ms</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Dashboard Grid -->
+        <main class="dashboard-grid">
+            <!-- Left Column: Video Feed & Vision Pipeline -->
+            <section class="panel video-panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <span class="header-icon">📹</span>
+                        <h2>Câmera Acoplada ao Cesto</h2>
+                    </div>
+                    <div class="stream-stats">
+                        <span class="badge" id="cameraSource">ESP32-CAM / PC</span>
+                        <span class="badge badge-fps" id="streamFps">-- FPS</span>
+                    </div>
+                </div>
+
+                <div class="video-container">
+                    <img id="videoFeed" src="" alt="Aguardando transmissão de vídeo do cesto..." class="video-stream">
+                    <div id="videoPlaceholder" class="video-placeholder">
+                        <div class="radar-spinner"></div>
+                        <p class="placeholder-title">Aguardando Transmissão de Vídeo do Cesto</p>
+                        <p class="placeholder-desc">Conecte o sensor <strong>ESP32-CAM</strong> na rede ou inicie o cliente de visão:<br><code>python3 camera_pc_client.py</code></p>
+                    </div>
+
+                    <!-- HUD Overlay -->
+                    <div class="video-hud">
+                        <div class="hud-item">
+                            <span class="hud-label">Cesto:</span>
+                            <span class="hud-val highlight" id="hudDetection">Nenhum item visível</span>
+                        </div>
+                        <div class="hud-item">
+                            <span class="hud-label">Histerese:</span>
+                            <span class="hud-val" id="hudDebounce">Sincronizado</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sensor Emulation / Testing Controls -->
+                <div class="simulation-controls">
+                    <span class="controls-label">Emulação de Sensores:</span>
+                    <button class="btn btn-sm btn-item" onclick="injetarProduto('bottle')" title="Colocar Garrafa no cesto">
+                        + 💧 Garrafa
+                    </button>
+                    <button class="btn btn-sm btn-item btn-remove" onclick="retirarProduto('bottle')" title="Tirar Garrafa do cesto">
+                        − 💧 Garrafa
+                    </button>
+                    <button class="btn btn-sm btn-item" onclick="injetarProduto('cup')" title="Colocar Copo no cesto">
+                        + ☕ Copo
+                    </button>
+                    <button class="btn btn-sm btn-item btn-remove" onclick="retirarProduto('cup')" title="Tirar Copo do cesto">
+                        − ☕ Copo
+                    </button>
+                    <button class="btn btn-sm btn-item" onclick="injetarProduto('cell phone')" title="Colocar Smartphone no cesto">
+                        + 📱 Celular
+                    </button>
+                    <button class="btn btn-sm btn-item btn-remove" onclick="retirarProduto('cell phone')" title="Tirar Smartphone do cesto">
+                        − 📱 Celular
+                    </button>
+                    <button class="btn btn-sm btn-danger" onclick="limparCarrinho()" title="Esvaziar todo o cesto">
+                        🗑️ Esvaziar
+                    </button>
+                </div>
+            </section>
+
+            <!-- Right Column: STR Telemetry & Shopping Cart -->
+            <section class="panel-column right-column">
+                <!-- STR Performance HUD Cards -->
+                <div class="str-metrics-row">
+                    <!-- Latency Card -->
+                    <div class="metric-card latency-card">
+                        <div class="metric-header">
+                            <span class="card-icon">⚡</span>
+                            <h3>Latência Ponta a Ponta</h3>
+                        </div>
+                        <div class="metric-main">
+                            <span class="metric-number" id="latAtual">0.0</span>
+                            <span class="metric-unit">ms</span>
+                        </div>
+                        <div class="metric-subgrid">
+                            <div><span class="sub-label">Média:</span> <span class="sub-val" id="latMedia">0.0 ms</span></div>
+                            <div><span class="sub-label">Desvio:</span> <span class="sub-val" id="latDesvio">0.0 ms</span></div>
+                            <div><span class="sub-label">WCET:</span> <span class="sub-val text-warning" id="latWcet">0.0 ms</span></div>
+                        </div>
+                    </div>
+
+                    <!-- Jitter Card -->
+                    <div class="metric-card jitter-card">
+                        <div class="metric-header">
+                            <span class="card-icon">📊</span>
+                            <h3>Jitter Instantâneo</h3>
+                        </div>
+                        <div class="metric-main">
+                            <span class="metric-number" id="jitAtual">0.0</span>
+                            <span class="metric-unit">ms</span>
+                        </div>
+                        <div class="metric-subgrid">
+                            <div><span class="sub-label">Médio:</span> <span class="sub-val" id="jitMedia">0.0 ms</span></div>
+                            <div><span class="sub-label">Desvio:</span> <span class="sub-val" id="jitDesvio">0.0 ms</span></div>
+                            <div><span class="sub-label">Pior Caso:</span> <span class="sub-val" id="jitMax">0.0 ms</span></div>
+                        </div>
+                    </div>
+
+                    <!-- Deadline & Slack Time Card -->
+                    <div class="metric-card deadline-card">
+                        <div class="metric-header">
+                            <span class="card-icon">⏱️</span>
+                            <h3>Previsibilidade STR</h3>
+                        </div>
+                        <div class="metric-main text-success">
+                            <span class="metric-number" id="slackTime">3000.0</span>
+                            <span class="metric-unit">ms Slack</span>
+                        </div>
+                        <div class="metric-subgrid">
+                            <div><span class="sub-label">Deadline:</span> <span class="sub-val" id="displayDeadline">3000 ms</span></div>
+                            <div><span class="sub-label">Violações:</span> <span class="sub-val text-success" id="violacoesCount">0 (0%)</span></div>
+                            <div><span class="sub-label">Amostras:</span> <span class="sub-val" id="totalAmostras">0</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Real-time Latency Chart vs Deadline -->
+                <div class="panel chart-panel">
+                    <div class="chart-header">
+                        <h4>Comportamento Temporal de Latência vs. Deadline (D = 3000 ms)</h4>
+                        <span class="legend-badge"><span class="legend-dot red"></span> Deadline 3000ms</span>
+                        <span class="legend-badge"><span class="legend-dot cyan"></span> Latência E2E</span>
+                    </div>
+                    <div class="canvas-wrapper">
+                        <canvas id="latencyCanvas" width="600" height="90"></canvas>
+                    </div>
+                </div>
+
+                <!-- Shopping Cart Component -->
+                <div class="panel cart-panel">
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <span class="header-icon">🛍️</span>
+                            <h2>Inventário Atual do Cesto</h2>
+                            <span class="items-count-badge" id="cartCountBadge">0 itens</span>
+                        </div>
+                        <div class="cart-total-box">
+                            <span class="total-label">Subtotal:</span>
+                            <span class="total-value" id="cartTotalValue">R$ 0,00</span>
+                        </div>
+                    </div>
+
+                    <div class="cart-table-wrapper">
+                        <table class="cart-table">
+                            <thead>
+                                <tr>
+                                    <th>Produto</th>
+                                    <th>Categoria</th>
+                                    <th>Preço Un.</th>
+                                    <th>Qtd</th>
+                                    <th>Subtotal</th>
+                                    <th>Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cartTableBody">
+                                <tr class="empty-row">
+                                    <td colspan="6">
+                                        <div class="empty-state">
+                                            <span class="empty-icon">🛒</span>
+                                            <p>O cesto do carrinho está vazio.</p>
+                                            <small>Coloque um produto dentro do carrinho para adicionar automaticamente ao inventário.</small>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Event Audit Log -->
+                    <div class="audit-log-container">
+                        <div class="audit-title">Log de Eventos Temporais do Cesto (Ao Vivo):</div>
+                        <div class="audit-list" id="auditList">
+                            <div class="audit-item system">SmartCart STR inicializado. Monitorando cesto em tempo real.</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Academic Information Footer -->
+        <footer class="academic-footer">
+            <div class="academic-meta">
+                <span class="academic-item"><strong>Disciplina:</strong> PET2245 - Sistemas em Tempo Real</span>
+                <span class="academic-item"><strong>Docente:</strong> Prof. Dr. Petrucio Ricardo Tavares de Medeiros</span>
+                <span class="academic-item"><strong>Autores:</strong> Nattan Ferreira Lopes &amp; Anderson Esmael Da Silva</span>
+            </div>
+            <div class="academic-system">
+                <span>SmartCart STR • Edge AI &amp; Soft/Firm Real-Time</span>
+            </div>
+        </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
